@@ -7,8 +7,10 @@
         // oCallbacks.onUploadProgress
         // oCallbacks.onHashProgress
         // oCallbacks.onDuplicateConfirm
+        // oConfig.relativePath
         // oConfig.folderkey
         // oConfig.apiUrl
+        // oConfig.apiVersion
         // oConfig.uploadUrl
         // oConfig.resourcePath
         // oConfig.concurrentUploads
@@ -32,7 +34,7 @@
         this.FILE_STATE_HASH_QUEUED = 'hash-queue';
         this.FILE_STATE_HASHING = 'hashing';
         this.FILE_STATE_HASHED = 'hashed';
-        this.FILE_STATE_PREUPLOADED = 'pre-upload';
+        this.FILE_STATE_UPLOAD_CHECK = 'pre-upload';
         this.FILE_STATE_UPLOAD_QUEUED = 'upload-queue';
         this.FILE_STATE_UPLOADING = 'uploading';
         this.FILE_STATE_VERIFYING = 'verifying';
@@ -66,9 +68,10 @@
         }
 
         this._actionToken = sActionToken;
-        this._apiUrl = oConfig.apiUrl || '//mediafire.com/api/';
+        this._apiUrl = (oConfig.apiUrl || '//mediafire.com/api/') + (oConfig.apiVersion ? oConfig.apiVersion + '/' : '');
         this._resourcePath = oConfig.resourcePath || '';
         this._uploadUrl = oConfig.uploadUrl || this._apiUrl;
+        this._uploadOnAdd = typeof oConfig.uploadOnAdd !== 'undefined' ? oConfig.uploadOnAdd : true;
 
         // Save optional config
         this._options = oConfig;
@@ -77,6 +80,7 @@
         this.files = [];
         this._activeUploads = 0;
         this._uploadQueue = [];
+        this._waitingToStartUpload = [];
 
         // Duplicate actions
         this._actionOnDuplicate = oConfig.actionOnDuplicate;
@@ -154,9 +158,12 @@
     };
 
     MFUploader.prototype._emit = function(iEvent, oFile, oData) {
-        if(this._callbacks[iEvent]) {
-            this._callbacks[iEvent](this, oFile, oData || oFile.state);
-        }
+        var emit = function() {
+            if(this._callbacks[iEvent]) {
+                this._callbacks[iEvent](this, oFile, oData || oFile.state);
+            }
+        };
+        setTimeout(emit.bind(this), 0);
     };
 
     MFUploader.prototype._augmentFile = function(oFile) {
@@ -206,6 +213,11 @@
         oParams.session_token = this._actionToken;
         oParams.uploadkey = this._options.folderkey || 'myfiles';
         oParams.response_format = 'json';
+
+        // Relative path specified
+        if(this._options.relativePath) {
+            oParams.path = this._options.relativePath;
+        }
 
         // Duplicate action is global or specified explicitly
         if(sDuplicateAction || this._actionOnDuplicate) {
@@ -259,6 +271,7 @@
             if(oFile.uploadRetries < (oThis._options.retryAttempts || 3)) {
                 oFile.uploadRetries++;
                 oThis._uploadUnit(oFile, iUnit);
+            // Out of retries, fail
             } else {
                 oThis._activeUploads--;
                 oFile.bytesUploaded -= iUnitBytesUploaded;
@@ -297,8 +310,6 @@
             oThis._emit(oThis.EVENT_UPLOAD_PROGRESS, oFile, oFile.bytesUploaded);
         }, false);
 
-        // TODO: error and abort handling for units
-
         oXHR.open('POST', this._uploadUrl + 'upload/resumable.php' + sQuery, true);
         oXHR.setRequestHeader('Content-Type', 'application/octet-stream');
         oXHR.setRequestHeader('X-Filename', oFile.name);
@@ -311,7 +322,7 @@
         oXHR.send(oUnitBlob);
     };
 
-    MFUploader.prototype._preupload = function(oFile) {
+    MFUploader.prototype._uploadCheck = function(oFile) {
         var oThis = this;
         var oParams = {
             hash: oFile.hashes.full,
@@ -326,19 +337,19 @@
                 
                 // Instant uploads enabled and hash exists, mark as instant upload
                 if(!oThis._options.disableInstantUploads && oData.response.hash_exists === "yes") {
-                	oFile.uploadType = oThis.TYPE_INSTANT;
-                	
-            	// Otherwise, it is a resumable upload
+                    oFile.uploadType = oThis.TYPE_INSTANT;
+                    
+                // Otherwise, it is a resumable upload
                 } else if(oData.response.resumable_upload) {
-                	oFile.uploadType = oThis.TYPE_RESUMABLE;
+                    oFile.uploadType = oThis.TYPE_RESUMABLE;
                     // Save unit states
                     oFile.units = MFUploader.decodeBitmap(oData.response.resumable_upload.bitmap);
                     // Cap bitmap to units
                     oFile.units.length = parseInt(oData.response.resumable_upload.number_of_units, 10);
                     // Increment the bytes the server already has
                     oFile.bytesUploaded = MFUploader.getBytesUploaded(oFile);
-				}
-				
+                }
+                
                 // Duplicate name, requires user action to continue
                 // unless user action has been applied to all or global is set
                 if(oData.response.file_exists === "yes") {
@@ -354,10 +365,10 @@
                             // Update state
                             oFile.state = oThis.FILE_STATE_SKIPPED;
                             oThis._emit(oThis.EVENT_FILE_STATE, oFile);
-                        // Attempt to preupload again
+                        // Attempt to check upload again
                         } else {
-                        	// send to upload
-                    		oThis._doUpload(oFile, oThis._actionOnDuplicate);
+                            // send to upload
+                            oThis._doUpload(oFile, oThis._actionOnDuplicate);
                         }
                     // Awaiting confirmation
                     } else {
@@ -373,24 +384,24 @@
                     
                 // File is instant upload (hash already exists)
                 } else if(oFile.uploadType === oThis.TYPE_INSTANT) {    
-                	
-                	// Update state
-                    oFile.state = oThis.FILE_STATE_PREUPLOADED;
+                    
+                    // Update state
+                    oFile.state = oThis.FILE_STATE_UPLOAD_CHECK;
                     oThis._emit(oThis.EVENT_FILE_STATE, oFile);
                     
                     // Do instant upload
-            		oThis._instant(oFile);
+                    oThis._instant(oFile);
                 
                 // File is resumable upload
                 } else if(oFile.uploadType === oThis.TYPE_RESUMABLE) {
                     
                     // Update state
-                    oFile.state = oThis.FILE_STATE_PREUPLOADED;
+                    oFile.state = oThis.FILE_STATE_UPLOAD_CHECK;
                     oThis._emit(oThis.EVENT_FILE_STATE, oFile);
                     
                     if(oData.response.resumable_upload.all_units_ready !== 'yes') {
-                    	oThis._resumable(oFile);
-                	}
+                        oThis._resumable(oFile);
+                    }
 
                 // Error 
                 } else {
@@ -407,31 +418,31 @@
     };
     
     MFUploader.prototype._doUpload = function(oFile, sDuplicateAction){
-    	// Send to appropriate upload method
-    	if(oFile.uploadType === this.TYPE_INSTANT) {
-    		this._instant(oFile, sDuplicateAction);
-		} else {
-        	this._resumable(oFile, sDuplicateAction);
-    	}
-	};
+        // Send to appropriate upload method
+        if(oFile.uploadType === this.TYPE_INSTANT) {
+            this._instant(oFile, sDuplicateAction);
+        } else {
+            this._resumable(oFile, sDuplicateAction);
+        }
+    };
     
     MFUploader.prototype._resumable = function(oFile, sDuplicateAction){
-    	// Attempt to start first unit upload
+        // Attempt to start first unit upload
         var iUnit = oFile.units.indexOf(false);
         if(iUnit >= 0) {
-	    	if(this._activeUploads < (this._options.concurrentUploads || 3)) {
-	            this._activeUploads++;
-	            this._uploadUnit(oFile, iUnit, sDuplicateAction);
-	            oFile.state = this.FILE_STATE_UPLOADING;
-	            this._emit(this.EVENT_FILE_STATE, oFile);
-	        // Queue upload
-	        } else {
-	            this._uploadQueue.push([oFile, iUnit]);
-	            oFile.state = this.FILE_STATE_UPLOAD_QUEUED;
-	            this._emit(this.EVENT_FILE_STATE, oFile);
-	        }
+            if(this._activeUploads < (this._options.concurrentUploads || 3)) {
+                this._activeUploads++;
+                this._uploadUnit(oFile, iUnit, sDuplicateAction);
+                oFile.state = this.FILE_STATE_UPLOADING;
+                this._emit(this.EVENT_FILE_STATE, oFile);
+            // Queue upload
+            } else {
+                this._uploadQueue.push([oFile, iUnit]);
+                oFile.state = this.FILE_STATE_UPLOAD_QUEUED;
+                this._emit(this.EVENT_FILE_STATE, oFile);
+            }
        }
-	};
+    };
 
     MFUploader.prototype._instant = function(oFile, sDuplicateAction) {
         var oThis = this;
@@ -440,6 +451,11 @@
             size: oFile.size,
             filename: oFile.name
         };
+
+        // Relative path specified
+        if(this._options.relativePath) {
+            oParams.path = this._options.relativePath;
+        }
 
         // Duplicate action is global or specified explicitly
         if(sDuplicateAction || this._actionOnDuplicate) {
@@ -502,61 +518,62 @@
         });
     };
     
-    MFUploader.prototype._passesFilter = function(oFile){
-        // if there is no filter, pass
-        if(!this._options.filterByExtension){
+    MFUploader.prototype._passesFilter = function(oFile) {
+        // If there is no filter, pass
+        if(!this._options.filterByExtension) {
             return true;
         }
         
-        var sExt = oFile.name.split('.').pop(), //get extenson
-            oFilters = this._options.filterByExtension, // store filter option (string or array)
-            bPass = false, // default is to NOT pass the filter
-            aFilters = []; // for storing extenstions from filter
-        // check if array
-        if(Object.prototype.toString.call(oFilters) === '[object Array]'){
-            aFilters = oFilters; // already array
-        }else{
-            aFilters = oFilters.split(/[\s,]+/); // convert to array
+        var sExt = oFile.name.split('.').pop().toLowerCase(), // get extenson
+            aFilters = this._options.filterByExtension; // for storing extenstions from filter
+
+        // Cast delimited string to Array
+        if(!(aFilters instanceof Array)) {
+            aFilters = aFilters.split(/[\s,]+/); // convert to array
         }
-        for(var i=0, l=aFilters.length; i<l; i++){
-            if(aFilters[i].toLowerCase() === sExt.toLowerCase()){
-                bPass = true; // if one of the extensions match, will pass
+
+        for(var i=0, l=aFilters.length; i<l; i++) {
+            if(aFilters[i].toLowerCase() === sExt) {
+                return true;
             }
         }
-        return bPass;
+
+        return false;
     };
 
     MFUploader.prototype.add = function(oFile) {
         
-        if(this._passesFilter(oFile) === false){
+        if(!this._passesFilter(oFile)) {
             return;
         }
         
         var oThis = this;
         this._augmentFile(oFile);
         this.files.push(oFile);
-        MFUploader.sortFiles(this.files);
         
         // Get thumbnail if configured to do so
-        if(!!this._options.returnThumbnails && oFile.size<this.THUMB_SIZE_LIMIT && MFUploader.isImage(oFile)){
-            setTimeout(function(){
-                oThis._getDataURL(oFile, function(sDataURL){
-                    oFile.dataURL = sDataURL;
-                    oThis._emit(oThis.EVENT_FILE_STATE, oFile);
-                });
-            }, 300);
+        if(!!this._options.returnThumbnails && oFile.size < this.THUMB_SIZE_LIMIT && MFUploader.isImage(oFile)) {
+            window.URL = window.URL || window.webkitURL;
+            if(window.URL) {
+                oFile.dataURL = window.URL.createObjectURL(oFile);
+                oThis._emit(oThis.EVENT_FILE_STATE, oFile);
+            }
         }
         
         // Add to hasher immediately, it has it's own queue system
         Hasher.addFile(oFile, oFile.unitSize, {
             success: function(oHashes) {
+                // Save hashes
+                oFile.hashes = oHashes;
                 // Update state
                 oFile.state = oThis.FILE_STATE_HASHED;
                 oThis._emit(oThis.EVENT_FILE_STATE, oFile);
-                // Save hashes
-                oFile.hashes = oHashes;
                 // Retrieve units needed to upload
-                oThis._preupload(oFile);
+                if(oThis._uploadOnAdd === true) {
+                    oThis._uploadCheck(oFile);
+                } else {
+                    oThis._waitingToStartUpload.push(oFile);
+                }
             },
             progress: function(iBytesHashed) {
                 // Update state
@@ -574,10 +591,9 @@
         return oFile.type.substr(0,6) === 'image/';
     };
     
-    MFUploader.prototype._getDataURL = function(oFile, fCallback){
-        var oFileReader = new FileReader();
-        oFileReader.onload = function(e){ if(e.target){ fCallback(e.target.result); } };
-        oFileReader.readAsDataURL(oFile);
+    MFUploader.prototype.startUpload = function() {
+        this._waitingToStartUpload.forEach(this._uploadCheck, this);
+        this._waitingToStartUpload = [];
     };
 
     MFUploader.prototype.send = function(aFiles) {
@@ -589,10 +605,10 @@
             if(aFiles.length === 1) {
                 this.add(aFiles[0]);
             } else {
-                // Sort files to be added first
-                MFUploader.sortFiles(aFiles);
                 // Add all files
-                aFiles.forEach(this.add, this);
+                for(var i=0, l=aFiles.length; i<l; i++) {
+                    this.add(aFiles[i]);
+                }
             }
         }
     };
@@ -612,7 +628,7 @@
                 this._emit(this.EVENT_FILE_STATE, oFile);
             // Send to upload
             } else {
-        		this._doUpload(oFile, sAction);
+                this._doUpload(oFile, sAction);
             }
 
             // Apply choice for future occurrences in this uploader instance
