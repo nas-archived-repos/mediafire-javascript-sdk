@@ -9,10 +9,9 @@
     /**
      * Initializes an application specific instance of MediaFire
      * @param {number} appId The supplied MediaFire application id
-     * @param {string} appKey The supplied MediaFire application key
      * @constructor
      */
-    function MediaFire(appId, appKey, options) {
+    function MediaFire(appId, options) {
         /**
          * Path to the uploader resources
          * @constant
@@ -22,7 +21,15 @@
         this._UPLOADER_RESOURCE_PATH = options.resourcePath || '';
 
         /**
-         * Path to the MediaFire api
+         * API version to use by default
+         * @constant
+         * @type {string}
+         * @private
+         */
+        this._API_VERSION = options.apiVersion || '';
+
+        /**
+         * Path to the MediaFire API
          * @constant
          * @type {string}
          * @private
@@ -41,7 +48,7 @@
          * @type {string}
          * @private
          */
-        this._appKey = appKey;
+        this._appKey = options.appKey || '';
 
         /**
          * API Session Token
@@ -116,7 +123,8 @@
                 this._sessionToken = data.response.session_token;
             };
 
-            this._get(this._API_PATH + 'user/renew_session_token.php', null, updateToken, this);
+            var versionPath = this._API_VERSION ? this._API_VERSION + '/' : '';
+            this._get(this._API_PATH + versionPath + 'user/renew_session_token.php', null, updateToken, this);
         };
 
         /**
@@ -178,7 +186,8 @@
          */
         this._getUploadActionToken = function(callback) {
             var options = {type: 'upload', lifespan: 1440};
-            this._get(this._API_PATH + 'user/get_action_token.php', options, this._parseCallback(callback), this);
+            var versionPath = this._API_VERSION ? this._API_VERSION + '/' : '';
+            this._get(this._API_PATH + versionPath + 'user/get_action_token.php', options, this._parseCallback(callback), this);
         };
     }
 
@@ -228,7 +237,8 @@
         credentials.signature = new SHA1().digestFromString(partial + this._appId + this._appKey);
 
         // Send session token request
-        this._get('https:' + this._API_PATH + 'user/get_session_token.php', credentials, callback, this);
+        var versionPath = this._API_VERSION ? this._API_VERSION + '/' : '';
+        this._get('https:' + this._API_PATH + versionPath + 'user/get_session_token.php', credentials, callback, this);
 
         // Renew session token every 6 minutes.
         var self = this;
@@ -246,7 +256,11 @@
      * @param {(object|function)=} callback The success and/or error callback functions
      * @returns {MediaFire} For chaining methods
      */
-    MediaFire.prototype.api = function(path, options, callback) {
+    MediaFire.prototype.api = function(path, options, callback, apiVersion) {
+        // Allow override of global API version
+        apiVersion = apiVersion || this._API_VERSION;
+
+        var versionPath = apiVersion ? apiVersion + '/' : '';
         this._get(this._API_PATH + path + '.php', options, this._parseCallback(callback), this);
         return this;
     };
@@ -255,9 +269,10 @@
      * Uploads files into the logged-in user's account
      * @param {object} files a FileList object from an event
      * @param {object=} callback {onUpdate:, onUploadProgress:, onHashProgress:}
+     * @param {object=} options configurations specific to MFUploader
      * @returns {MediaFire} For chaining methods
      */
-    MediaFire.prototype.upload = function(files, callbacks) {
+    MediaFire.prototype.upload = function(files, callbacks, options) {
         var actionToken = this._actionToken;
         var self = this;
         var bFilesSent = false;
@@ -265,10 +280,12 @@
         var checkReadyState = function() {
             if(actionToken) {
                 if(window.MFUploader && !self._uploader) {
-                    var options = {
-                        apiUrl: self._API_PATH,
-                        resourcePath: self._UPLOADER_RESOURCE_PATH
-                    };
+                    options = options || {};
+                    options.apiUrl = self._API_PATH;
+                    options.resourcePath = self._UPLOADER_RESOURCE_PATH;
+                    if(!options.apiVersion && self._API_VERSION) {
+                        options.apiVersion = self._API_VERSION;
+                    }
                     self._uploader = new MFUploader(actionToken, callbacks, options);
                 }
 

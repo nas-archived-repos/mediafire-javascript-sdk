@@ -14,9 +14,8 @@
     var _login = function(oConfig, fCallback, oScope) {
         var sTargetOrigin = 'https://mediafire.com';
         var sOrigin = encodeURIComponent(window.location.protocol + '//' + window.location.hostname);
-        var sAppKey = encodeURIComponent(oConfig.apiKey);
         var iAppId = encodeURIComponent(oConfig.apiID);
-        var sUrl = sTargetOrigin + '/auth/mediafire_login.php?app_key=' + sAppKey + '&app_id=' + iAppId + '&origin=' + sOrigin;
+        var sUrl = sTargetOrigin + '/auth/mediafire_login.php?app_id=' + iAppId + '&origin=' + sOrigin;
         var iPingInterval, iNameTransportInterval;
         var wPopup = _popup(sUrl, 520, 360);
 
@@ -63,21 +62,20 @@
         }
     };
 
-    function MediaFire(iAppID, sAppKey) {
+    function MediaFire(iAppID) {
         this._appId = iAppID;
-        this._appKey = sAppKey;
         this._sessionToken = '';
     };
 
     MediaFire.prototype.login = function(fCallback) {
         var oThis = this;
-        _login({apiID: this._appId, apiKey: this._appKey}, function(sSessionToken) {
+        _login({apiID: this._appId}, function(sSessionToken) {
             oThis._sessionToken = sSessionToken;
             fCallback(sSessionToken);
         });
     };
 
-    // Integrate into existing MediaFire SDK if available
+    // Integrate into existing MediaFire SDK
     if(window.MF && MF.prototype && MF.prototype.login) {
         MF.prototype._authLogin = MediaFire.prototype.login;
     } else {
