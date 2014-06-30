@@ -9,10 +9,9 @@
     /**
      * Initializes an application specific instance of MediaFire
      * @param {number} appId The supplied MediaFire application id
-     * @param {string} appKey The supplied MediaFire application key
      * @constructor
      */
-    function MediaFire(appId, appKey, options) {
+    function MediaFire(appId, options) {
         /**
          * Path to the uploader resources
          * @constant
@@ -49,7 +48,7 @@
          * @type {string}
          * @private
          */
-        this._appKey = appKey;
+        this._appKey = options.appKey || '';
 
         /**
          * API Session Token
