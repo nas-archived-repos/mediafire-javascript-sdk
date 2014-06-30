@@ -71,7 +71,9 @@
         var oThis = this;
         _login({apiID: this._appId}, function(sSessionToken) {
             oThis._sessionToken = sSessionToken;
-            fCallback(sSessionToken);
+            if(fCallback) {
+                fCallback(sSessionToken);
+            }
         });
     };
 

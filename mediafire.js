@@ -201,6 +201,7 @@
         // Auth-like login available, and credentials is a callback or null
         if(this._authLogin && (!credentials || typeof credentials === 'function')) {
             this._authLogin(credentials);
+            return;
         }
 
         var oThis = this;
