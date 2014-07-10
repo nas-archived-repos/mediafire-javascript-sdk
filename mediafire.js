@@ -119,12 +119,12 @@
          */
         this._renew = function() {
             /** @this MediaFire */
-            var updateToken = function(data) {
+            var callbackRenewToken = { success: function(data) {
                 this._sessionToken = data.response.session_token;
-            };
+            }};
 
             var versionPath = this._API_VERSION ? this._API_VERSION + '/' : '';
-            this._get(this._API_PATH + versionPath + 'user/renew_session_token.php', null, updateToken, this);
+            this._get(this._API_PATH + versionPath + 'user/renew_session_token.php', null, callbackRenewToken, this);
         };
 
         /**
